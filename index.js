@@ -14,7 +14,7 @@ const app = express();
 app.use(express.json()); // for parsing application/json
 app.use(cors());
 
-const hostname = "localhost";
+const hostname = "vercel.app";
 
 const server = http.createServer(app);
 const io = socketIo(server);
