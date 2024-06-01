@@ -1,20 +1,36 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
+const fs = require("fs");
 const http = require("http");
 const socketIo = require("socket.io");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const validator = require("validator");
 const cors = require("cors");
+const cookie = require("cookie");
+const nodemailer = require("nodemailer");
+require("dotenv").config();
 const app = express();
 
 //const allowedOrigins=['http://127.0.0.1:3000/', 'http://127.0.0.1:5500/']
 
 app.use(express.json()); // for parsing application/json
-app.use(cors());
+app.use(
+	cors({
+		origin: "http://127.0.0.1:5500",
+		credentials: true,
+		exposedHeaders: ["Set-Cookie", "Date", "ETag"],
+	})
+);
 
-const hostname = "vercel.app";
+if (process.env.SECRET_KEY == undefined)
+	fs.writeFileSync(
+		".env",
+		`SECRET_KEY=${crypto.randomBytes(20).toString("hex")}\n`
+	);
+
+const hostname = "localhost";
 
 const server = http.createServer(app);
 const io = socketIo(server);
@@ -150,22 +166,35 @@ const User = mongoose.model("Users", users);
 const Bonus = mongoose.model("Bonus", BonusSchema);
 const Finance = mongoose.model("Finance", FinancialSchema);
 
-// Create a new document in the database
-app.post("/create/product", async (req, res) => {
+function verifyToken(req, res, next) {
+	const cookies = cookie.parse(req.headers.cookie || "");
+	const token = cookies.token;
+
+	jwt.verify(token, process.env.SECRET_KEY.toString(), (err, decoded) => {
+		if (err) {
+			res.send({ msg: "Access denied" });
+		} else {
+			req.decoded = decoded;
+			next();
+		}
+	});
+}
+
+app.post("/create/product", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Products");
 	const newTest = new Product(req.body);
 	const result = await newTest.save();
 	res.send(result);
 });
 
-app.post("/create/chat", async (req, res) => {
+app.post("/create/chat", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Chat");
 	const newTest = new Chat(req.body);
 	const result = await newTest.save();
 	res.send(result);
 });
 
-app.post("/create/user", async (req, res) => {
+app.post("/createUser", verifyToken, async (req, res) => {
 	if (!req.body.email || !req.body.password) {
 		return res.status(400).json({ message: "Missing email or password" });
 	}
@@ -174,21 +203,50 @@ app.post("/create/user", async (req, res) => {
 		return res.status(400).json({ message: "Invalid email" });
 	}
 
-	req.body.password = await hash(req.body.password);
+	const Credentials = Sanitizer(req.body.email, req.body.password);
+	const name = nameSanitizer(req.body.username);
+	req.body.password = hash(Credentials.sanitizedPassword);
+	req.body.email = Credentials.sanitizedEmail;
+	req.body.name = name;
 	req.body._id = await generateUserId("Users");
 	const newTest = new User(req.body);
 	const result = await newTest.save();
-	res.send(result);
+	const payload = {
+		identifier: req.body._id,
+	};
+
+	const expirationDateString = 30 * 24 * 60 * 60 * 1000;
+
+	try {
+		const token = jwt.sign(payload, process.env.SECRET_KEY.toString(), {
+			expiresIn: 30 * 24 * 60 * 60 * 1000,
+		});
+
+		res.setHeader(
+			"Set-Cookie",
+			cookie.serialize("token", token, {
+				maxAge: expirationDateString,
+				sameSite: "none",
+				secure: true,
+				httpOnly: true,
+				path: "/",
+			})
+		);
+		res.send({ payload });
+		sendWelcomeEmail(req.body.email, req.body.name);
+	} catch (err) {
+		console.error(err);
+	}
 });
 
-app.post("/create/payement", async (req, res) => {
+app.post("/create/payment", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Payment");
 	const newTest = new Payment(req.body);
 	const result = await newTest.save();
 	res.send(result);
 });
 
-app.post("/create/order", async (req, res) => {
+app.post("/create/order", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Orders");
 	req.body.delivery_date = calculateDeliveryDate();
 	const newTest = new Order(req.body);
@@ -196,21 +254,21 @@ app.post("/create/order", async (req, res) => {
 	res.send(result);
 });
 
-app.post("/create/shipping", async (req, res) => {
+app.post("/create/shipping", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Shippings");
 	const newTest = new Shipping(req.body);
 	const result = await newTest.save();
 	res.send(result);
 });
 
-app.post("/create/bonus", async (req, res) => {
+app.post("/create/bonus", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Bonus");
 	const newTest = new Bonus(req.body);
 	const result = await newTest.save();
 	res.send(result);
 });
 
-app.post("/create/finance", async (req, res) => {
+app.post("/create/finance", verifyToken, async (req, res) => {
 	req.body._id = await generateUserId("Finance");
 	const newTest = new Finance(req.body);
 	const result = await newTest.save();
@@ -218,22 +276,28 @@ app.post("/create/finance", async (req, res) => {
 });
 
 // Read a document from the database
-app.get("/get/product/:id", async (req, res) => {
+
+app.get("/get/products", verifyToken, async (req, res) => {
+	const result = await Product.find({});
+	res.send(result);
+});
+
+app.get("/get/product/:id", verifyToken, async (req, res) => {
 	const result = await Product.findOne({ _id: req.params.id });
 	res.send(result);
 });
 
-app.get("/get/product/:carBrand", async (req, res) => {
+app.get("/get/product/:carBrand", verifyToken, async (req, res) => {
 	const result = await Product.find({ car_brand: req.params.carBrand });
 	res.send(result);
 });
 
-app.get("/get/product/:carModel", async (req, res) => {
+app.get("/get/product/:carModel", verifyToken, async (req, res) => {
 	const result = await Product.find({ car_model: req.params.carModel });
 	res.send(result);
 });
 
-app.get("/get/product/:carBrand/:carModel", async (req, res) => {
+app.get("/get/product/:carBrand/:carModel", verifyToken, async (req, res) => {
 	const result = await Product.find({
 		car_brand: req.params.carBrand,
 		car_model: req.params.carModel,
@@ -241,15 +305,19 @@ app.get("/get/product/:carBrand/:carModel", async (req, res) => {
 	res.send(result);
 });
 
-app.get("/get/product/:makeMaterial/:category", async (req, res) => {
-	const result = await Product.find({
-		make_material: req.params.makeMaterial,
-		category: req.params.category,
-	});
-	res.send(result);
-});
+app.get(
+	"/get/product/:makeMaterial/:category",
+	verifyToken,
+	async (req, res) => {
+		const result = await Product.find({
+			make_material: req.params.makeMaterial,
+			category: req.params.category,
+		});
+		res.send(result);
+	}
+);
 
-app.get("/get/product/:category/:carModel", async (req, res) => {
+app.get("/get/product/:category/:carModel", verifyToken, async (req, res) => {
 	const result = await Product.find({
 		category: req.params.category,
 		car_model: req.params.carModel,
@@ -257,79 +325,127 @@ app.get("/get/product/:category/:carModel", async (req, res) => {
 	res.send(result);
 });
 
-app.get("/get/product/:category/:categoryBrand", async (req, res) => {
-	const result = await Product.find({
-		category: req.params.category,
-		category_brand: req.params.categoryBrand,
-	});
-	res.send(result);
-});
+app.get(
+	"/get/product/:category/:categoryBrand",
+	verifyToken,
+	async (req, res) => {
+		const result = await Product.find({
+			category: req.params.category,
+			category_brand: req.params.categoryBrand,
+		});
+		res.send(result);
+	}
+);
 
-app.get("/get/product/:carModel/:fitPosition", async (req, res) => {
-	const result = await Product.find({
-		car_model: req.params.carModel,
-		fit_position: req.params.fitPosition,
-	});
-	res.send(result);
-});
+app.get(
+	"/get/product/:carModel/:fitPosition",
+	verifyToken,
+	async (req, res) => {
+		const result = await Product.find({
+			car_model: req.params.carModel,
+			fit_position: req.params.fitPosition,
+		});
+		res.send(result);
+	}
+);
 
-app.get("/get/users", async (req, res) => {
+app.get("/get/users", verifyToken, async (req, res) => {
 	const result = await User.find({});
 	res.send(result);
 });
 
-app.get("/get/user/:id", async (req, res) => {
+app.get("/get/user/:id", verifyToken, async (req, res) => {
 	const result = await User.findOne({ _id: req.params.id });
 	res.send(result);
 });
 
-app.get("/get/user", async (req, res) => {
+app.get("/get/user", verifyToken, async (req, res) => {
 	const result = await User.find({ email: req.query.email });
 	res.send(result);
 });
 
-app.get("/get/chats", async (req, res) => {
+app.get("/get/chats", verifyToken, async (req, res) => {
 	const result = await Chat.find({});
 	res.send(result);
 });
 
-app.get("/get/chat/:id", async (req, res) => {
+app.get("/get/chat/:id", verifyToken, async (req, res) => {
 	const result = await Chat.find({ _id: req.params.id });
 	res.send(result);
 });
 
-app.get("/get/order/:status", async (req, res) => {
+app.get("/get/order/:status", verifyToken, async (req, res) => {
 	const result = await Order.find({ order_status: req.params.status });
 	res.send(result);
 });
 
-app.get("/get/order", async (req, res) => {
+app.get("/get/order", verifyToken, async (req, res) => {
 	const result = await Order.find({});
 	res.send(result);
 });
 
-app.get("/get/payments", async (req, res) => {
+app.get("/get/order/:user__id", verifyToken, async (req, res) => {
+	const result = await Order.find({ user_id: req.params.user__id });
+	res.send(result);
+});
+
+app.get("/get/payments", verifyToken, async (req, res) => {
 	const result = await Payment.find({});
 	res.send(result);
 });
 
-app.get("/get/shippings", async (req, res) => {
+app.get("/get/shippings", verifyToken, async (req, res) => {
 	const result = await Payment.find({});
 	res.send(result);
 });
 
-app.get("/get/bonus", async (req, res) => {
+app.get("/get/bonus", verifyToken, async (req, res) => {
 	const result = await Bonus.find({});
 	res.send(result);
 });
 
-app.get("/get/cards", async (req, res) => {
+app.get("/get/cards", verifyToken, async (req, res) => {
 	const result = await Finance.find({});
 	res.send(result);
 });
 
+app.post("/", async (req, res) => {
+	const cookies = cookie.parse(req.headers.cookie || "");
+	const token = cookies.token;
+	const expirationDateString = 30 * 24 * 60 * 60 * 1000;
+	try {
+		if (!token) {
+			const payload = { identifier: "guest" };
+			const guestToken = jwt.sign(payload, process.env.SECRET_KEY.toString());
+			res.setHeader(
+				"Set-Cookie",
+				cookie.serialize("token", guestToken, {
+					maxAge: expirationDateString,
+					sameSite: "none",
+					secure: true,
+					httpOnly: true,
+				})
+			);
+			res.send({ payload });
+		} else {
+			try {
+				jwt.verify(token, process.env.SECRET_KEY.toString());
+				const payload = getPayload(token);
+				res.send({ payload });
+			} catch (err) {
+				console.error(err);
+				res.status(401).send("Invalid Token");
+			}
+		}
+	} catch (err) {
+		console.error(err);
+		console.log("authentication working");
+		res.status(500).send("Internal Server Error");
+	}
+});
+
 //Routes to Update a document in the database
-app.put("/update/messages/:id/add", async (req, res) => {
+app.put("/update/messages/:id/add", verifyToken, async (req, res) => {
 	const result = await Chat.findByIdAndUpdate(
 		req.params.id,
 		{
@@ -344,27 +460,12 @@ app.put("/update/messages/:id/add", async (req, res) => {
 	res.send(result);
 });
 
-app.put("/update/messages/:id/add", async (req, res) => {
-	const result = await Chat.findByIdAndUpdate(
-		req.params.id,
-		{
-			$push: {
-				messages: {
-					$each: req.body,
-				},
-			},
-		},
-		{ new: true }
-	);
-	res.send(result);
-});
-
-app.put("/update/products/:id", async (req, res) => {
+app.put("/update/products/:id", verifyToken, async (req, res) => {
 	const result = await Product.findByIdAndUpdate(req.params.id, req.body);
 	res.send(result);
 });
 
-app.put("/update/user/shipping/:id", async (req, res) => {
+app.put("/update/user/shipping/:id", verifyToken, async (req, res) => {
 	const result = await User.findByIdAndUpdate(
 		req.params.id,
 		{
@@ -382,84 +483,119 @@ app.put("/update/user/shipping/:id", async (req, res) => {
 //end of updates
 
 // Routes to Delete a document from the database
-app.delete("/delete/bonus/:id", async (req, res) => {
+app.delete("/delete/bonus/:id", verifyToken, async (req, res) => {
 	const result = await Bonus.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
-app.delete("/delete/payment/:id", async (req, res) => {
+app.delete("/delete/payment/:id", verifyToken, async (req, res) => {
 	const result = await Payment.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
-app.delete("/delete/product/:id", async (req, res) => {
+app.delete("/delete/product/:id", verifyToken, async (req, res) => {
 	const result = await Product.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
-app.delete("/delete/chat/:id", async (req, res) => {
+app.delete("/delete/chat/:id", verifyToken, async (req, res) => {
 	const result = await Chat.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
-app.delete("/delete/order/:id", async (req, res) => {
+app.delete("/delete/order/:id", verifyToken, async (req, res) => {
 	const result = await Order.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
-app.delete("/delete/shipping/:id", async (req, res) => {
+app.delete("/delete/shipping/:id", verifyToken, async (req, res) => {
 	const result = await Chat.findByIdAndDelete(req.params.id);
 	res.send(result);
 });
 
 //Delete route ends here
 
-
 //Login Route
-app.post("/login", async (req, res) => {
-	const password = req.body.password;
+app.post("/login", verifyToken, async (req, res) => {
+	const expirationDateString = 30 * 24 * 60 * 60 * 1000;
+	const userData = Sanitizer(req.body.email, req.body.password);
 
-	if (!req.body.email || !req.body.password) {
-		return res.status(400).json({ message: "Missing email or password" });
+	if (!userData.sanitizedEmail || !userData.sanitizedPassword) {
+		return res.json({ message: "Missing email or password" });
 	}
 
-	const user = await User.findOne({ email: req.body.email });
+	const user = await User.findOne({ email: userData.sanitizedEmail });
 	if (!user) {
-		return res.status(400).json({ msg: "Invalid Email" });
+		return res.json({ msg: "Email not found" });
 	}
 
-	const isMatch = await bcrypt.compare(password, user.password);
+	const isMatch = bcrypt.compareSync(userData.sanitizedPassword, user.password);
 	if (!isMatch) {
-		return res.status(400).json({ msg: "Invalid Password" });
+		return res.json({ msg: "Wrong Password" });
 	}
 
 	const payload = {
-		user: {
-			identifier: user.id,
-		},
+		identifier: user.id,
 	};
 
-	const key = crypto.randomBytes(32).toString("hex");
+	try {
+		const token = jwt.sign(payload, process.env.SECRET_KEY.toString(), {
+			expiresIn: 30 * 24 * 60 * 60 * 1000,
+		});
 
-	const token = jwt.sign(payload, key, { expiresIn: 360000 }, (err, token) => {
-		if (err) throw err;
-		res.json({ token });
-	});
-	res.status(200).json({ token });
+		res.setHeader(
+			"Set-Cookie",
+			cookie.serialize("token", token, {
+				maxAge: expirationDateString,
+				sameSite: "none",
+				secure: true,
+				httpOnly: true,
+			})
+		);
+		res.send({ payload });
+	} catch (err) {
+		console.error(err);
+	}
+});
+
+app.post("/logout", verifyToken, async (req, res) => {
+	const expirationDateString = 30 * 24 * 60 * 60 * 1000;
+	const payload = {
+		identifier: "guest",
+	};
+
+	try {
+		const token = jwt.sign(payload, process.env.SECRET_KEY.toString(), {
+			expiresIn: 30 * 24 * 60 * 60 * 1000,
+		});
+
+		res.setHeader(
+			"Set-Cookie",
+			cookie.serialize("token", token, {
+				maxAge: expirationDateString,
+				sameSite: "none",
+				secure: true,
+				httpOnly: true,
+			})
+		);
+		res.send({ payload });
+	} catch (err) {
+		console.error(err);
+	}
 });
 
 //End of Login route
 
-
-
-
-
 //Sever-side hash
-async function hash(password) {
-	const saltRounds = 15;
-	const salt = await bcrypt.genSalt(saltRounds);
-	const hashedPassword = await bcrypt.hash(password, salt);
-	return hashedPassword;
+function hash(password) {
+	try {
+		const rounds = parseInt(process.env.ROUNDS, 10);
+		const salt = bcrypt.genSaltSync(rounds);
+		const hashedPassword = bcrypt.hashSync(password, salt);
+		return hashedPassword;
+	} catch (error) {
+		console.log(error);
+	}
 }
 
 //Calculates delivery Date
@@ -476,6 +612,24 @@ function calculateDeliveryDate() {
 	}
 
 	return now;
+}
+
+//Decode jwt payload
+function getPayload(token) {
+	const base64Url = token.split(".")[1];
+	const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+	const payload = JSON.parse(
+		decodeURIComponent(
+			atob(base64)
+				.split("")
+				.map(function (c) {
+					return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+				})
+				.join("")
+		)
+	);
+
+	return payload;
 }
 
 //AutoGenerateID for documents on database
@@ -509,6 +663,17 @@ async function countDocuments(collectionName) {
 	return count;
 }
 
+//severSide_Sanitizer
+function Sanitizer(email, password) {
+	const sanitizedEmail = validator.normalizeEmail(email);
+	const sanitizedPassword = validator.escape(password);
+	return { sanitizedEmail, sanitizedPassword };
+}
+
+function nameSanitizer(name) {
+	const sanitizedName = validator.escape(name);
+	return sanitizedName;
+}
 //socket.io section
 
 var UserSocketMap = new Map();
@@ -528,34 +693,225 @@ io.on("connection", (socket) => {
 		});
 	});
 
-	socket.on("chat message", (msg) => {
+	socket.on("admin_reply", async (msg) => {
 		const SendPort = UserSocketMap.get(msg.reciever);
 		io.to(SendPort).emit("chat message", msg);
+		const historyConversation = await CheckChats(msg.reciever);
+		const chatID = historyConversation._id;
+		socket.emit("store_chat", { msg, chatID });
 	});
 
-	socket.on("registered", (userID) => {
+	socket.on("chat message", async (msg) => {
+		const SendPort = UserSocketMap.get(msg.reciever);
+		io.to(SendPort).emit("chat message", msg);
+		const historyConversation = await CheckChats(msg.sender);
+		if (historyConversation) {
+			const chatID = historyConversation._id;
+			socket.emit("update_chats", { msg, chatID });
+		} else {
+			socket.emit("start_chats", msg);
+		}
+	});
+
+	socket.on("register", (userID) => {
 		UserSocketMap.set(userID, socket.id);
 		console.log("User registered: " + userID);
 	});
 });
 
-//Route for login
-app.post("/Login", (req, res) => {
-	const secret = crypto.randomBytes(16).toString("hex");
-
-	const payload = {
-		email,
-		exp: Math.floor(Date.now() / 1000) + 60 * 60 * 30, // 1 hour
-	};
-
-	// Sign the payload with the secret key and get the token
-	const token = jwt.sign(payload, secret);
-
-	// Send the token back to the user
+var port = process.env.PORT || 3000;
+app.listen(port, hostname, function () {
+	console.log("App is listening on " + hostname + ":" + port);
 });
 
+//Side functions needed by socket
 
-const port = process.env.PORT || 3000;
-app.listen(port, hostname, () =>
-	console.log(`Server is running on ${hostname} port: ${port}`)
-);
+async function CheckChats(user) {
+	try {
+		const result = await Chat.findOne({ user_id: user });
+		console.log(result);
+		return result;
+	} catch (err) {
+		console.log(err);
+	}
+}
+
+//added portion
+
+app.put("/update/product/addReview/:id", async (req, res) => {
+	const result = await Product.findByIdAndUpdate(
+		req.params.id,
+		{ $push: { reviews: req.body } },
+		{ new: true }
+	);
+	res.send(result);
+});
+
+app.get("/get/orders", async (req, res) => {
+	try {
+		const result = await Order.find({});
+		const newResult = result.map((item) => ({ ...item, id: item._id }));
+		res.send(newResult);
+	} catch (error) {
+		res.status(500).send("Error retrieving orders");
+	}
+});
+
+app.get("/get/chat/admin/:id", async (req, res) => {
+	const result = await Chat.find({ adminId: req.params.id });
+
+	const newResult = await Promise.all(
+		result.map(async (chat) => {
+			const user = await User.findOne(
+				{ _id: chat.userId },
+				{ username: true, _id: false }
+			);
+			return { ...chat._doc, username: user.username };
+		})
+	);
+
+	res.send(newResult);
+});
+
+//send-email
+app.post("/send-email", async (req, res) => {
+	try {
+		const { name, email, subject, message } = req.body;
+
+		// Sanitize inputs (use express-validator if needed)
+
+		// Create a transporter (SMTP settings)
+		const transporter = nodemailer.createTransport({
+			host: process.env.SERVICE,
+			secure: true,
+			auth: {
+				user: process.env.HOST,
+				pass: process.env.HOSTPASS,
+			},
+		});
+
+		await transporter.sendMail({
+			from: `${name} <infos@yotaperformanceshop.com>`,
+			to: "infos@yotaperformanceshop.com",
+			subject: subject,
+			text: `Name: ${name}\nEmail: ${email}\nMessage: ${message}`,
+		});
+
+		res.status(200).json({ message: "Email sent successfully!" });
+	} catch (error) {
+		console.error("Error sending email:", error);
+		res.status(500).json({ error: "Failed to send email" });
+	}
+});
+
+async function sendWelcomeEmail(email, name) {
+	const transporter = nodemailer.createTransport({
+		host: process.env.SERVICE,
+		secure: true,
+		auth: {
+			user: process.env.HOST,
+			pass: process.env.HOSTPASS,
+		},
+	});
+
+	await transporter.sendMail({
+		from: "Yota Performance Shop <infos@yotaperformanceshop.com>",
+		to: email,
+		subject: "Welcome to Yota Performance Shop!",
+		html: `
+		<!DOCTYPE html>
+<html>
+	<head>
+		<title>Welcome Email</title>
+		<style>
+			body {
+				padding: 20px;
+                margin: auto;
+			}
+
+			ul,
+			li {
+				list-style: none;
+				width: max-content;
+				padding: 0px;
+				margin-top: 40px;
+				margin-bottom: 50px;
+			}
+
+			.address {
+				font-size: 14px;
+				margin: auto;
+				text-align: right;
+			}
+
+			a {
+				text-decoration: none;
+				color: white;
+				background: linear-gradient(45deg, #ff0000af, #ff003c);
+				border-radius: 4px;
+				padding: 10px 15px;
+			}
+
+			p {
+				font-size: 16px;
+			}
+
+            .YPS-footer-logo{
+                width: 100%;
+                margin: 40px 0px 10px;
+                border-radius: 6px;
+            }
+
+            a.socials img{
+                width: 25px;
+                height: 25px;
+            }
+
+            a.socials{
+                display: flex;
+                align-items: center;
+                padding: 4px;
+            }
+
+            span.social-section{
+                font-weight: 600;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+		</style>
+	</head>
+	<body>
+		<h1>Welcome to Yota Performance Shop!</h1>
+		<p style="font-weight: 600;">Dear ${name},</p>
+		<p>We're excited to have you on board. Thank you for signing up!</p>
+		<p>You can continue back to our website using the link below :</p>
+		<ul>
+			<li>
+				<a href="">Start Shopping now</a>
+			</li>
+		</ul>
+		<p>
+			If you have any questions, feel free to reply to this email. We're here to
+			help!
+		</p>
+		<p>Best,</p>
+		<p>${name}</p>
+        <span class="social-section">
+            Follow us on Instagram:
+            <a href="https://www.instagram.com/matt_toyota_autospare?igsh=eHg3dTh3N2R2MTR2" class="socials">
+			<img src="./email_Resource/instagram.svg" alt="instagram_logo">
+			</a>
+        </span>
+        <img src="./email_Resource/haArtboard_1.png" alt="YPS-footer" class="YPS-footer-logo">
+		<p class="address">
+			&copy;2024 Yota Performance Shop <br />
+			2400 W Seventh Ave <br />
+			Dever, CO 80204 United States
+		</p>
+	</body>
+</html>
+
+		`,
+	});
+}

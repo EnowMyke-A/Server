@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!--link to fonts-->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!--lottie library link-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bodymovin/5.7.4/lottie.min.js"></script>
+    <link rel="icon" href="./assets/favicon.svg">
+    <link rel="stylesheet" href="./account.css">
+    <!--font awesome inclusion-->
+    <script src="https://kit.fontawesome.com/6fff8359ae.js" crossorigin="anonymous"></script>
+
+    <link rel="stylesheet" href="./animations/movement.css">
+    <script src="./animations/movement.js"></script>
+    <script src="./script.js"></script>
+    <title>Devify Music</title>
+</head>
+<body>
+    <div class="landing_container" id="Login_page">
+        <div class="login">
+            <div class="Logo_container login-signup">
+                <img src="./assets/Logo_white.svg" alt="Logo" class="large_logo animate-object shrink-position-logo">
+                <h1 class="Logo_heading login_heading shrink-text-logo animate-object">Devify Music</h1>
+            </div>
+            <form action="" id="authentication-form">
+                <input type="email" placeholder="Your email" class="form-input" id="email-login">
+                <input type="password" placeholder="Your password" class="form-input" id="password-login">
+            </form>
+           <button class="landing_button primary-btn" onclick="LoginClick()">Login</button>
+           <span style="font-weight: 800;">OR</span>
+           <ul class="third-party-login">
+            <li><i class="fa-brands fa-apple"></i></li>
+            <li><i class="fa-brands fa-google"></i></li>
+            <li><i class="fa-brands fa-facebook-f"></i></li>
+           </ul>
+           <p>Don't have an account? <button class="register-btn" onclick="MoveToSignUp()">Sign up</button></p>
+    </div>   
+    </div>
+
+    <div class="landing_container" id="signUp">
+        <div class="login logout">
+            <div class="Logo_container login-signup">
+                <img src="./assets/Logo_white.svg" alt="Logo" class="large_logo animate-object shrink-position-logo">
+                <h1 class="Logo_heading login_heading animate-object shrink-text-logo">Devify Music</h1>
+            </div>
+            <form action="" id="authentication-form">
+                <input type="text" placeholder="Your name" class="form-input" id="username-signUp">
+                <input type="email" placeholder="Your email" class="form-input" id="email-signUp">
+                <input type="password" placeholder="Your password" class="form-input" id="password-signUp">
+            </form>
+           <button class="landing_button primary-btn" onclick="SignUpClick()">Sign up
+           </button>
+           <span style="font-weight: 800;">OR</span>
+           <ul class="third-party-login">
+            <li><i class="fa-brands fa-apple"></i></li>
+            <li><i class="fa-brands fa-google"></i></li>
+            <li><i class="fa-brands fa-facebook-f"></i></li>
+           </ul>
+           <p>Already have an account? <button class="register-btn" onclick="MoveToLogin()">Login</button></p>
+    </div>   
+    </div>
+
+</body>
+</html>
